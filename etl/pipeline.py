@@ -32,7 +32,7 @@ def run_pipeline(year=None, month=None):
     """
 
     # periodo objetivo: ayer
-    today = date(2026,1,15)
+    today = date.today()
     yesterday = today - timedelta(days=1)
     target_date = yesterday.strftime("%Y-%m-%d")
 
