@@ -130,6 +130,17 @@ def run_pipeline(year=None, month=None):
         
         df_matriculas_pi_final = transform_matriculas(df_matriculas_pi_raw)
         df_primera_cuota_pi_final = transform_pagos_primera_cuota(df_matriculas_pi_raw)
+        
+        # Filtrar pagos de primera cuota para excluir los de matrículas descartadas
+        if not df_matriculas_pi_final.empty and not df_primera_cuota_pi_final.empty:
+            codigos_matriculas_validas = set(df_matriculas_pi_final["codigo_matricula"].dropna().astype(str).unique())
+            total_pagos_antes = len(df_primera_cuota_pi_final)
+            df_primera_cuota_pi_final = df_primera_cuota_pi_final[
+                df_primera_cuota_pi_final["codigo_matricula"].astype(str).isin(codigos_matriculas_validas)
+            ].reset_index(drop=True)
+            excluidos = total_pagos_antes - len(df_primera_cuota_pi_final)
+            if excluidos > 0:
+                logger.info(f"Excluidos {excluidos} pagos de primera cuota por matrículas descartadas (no comienzan con 'P')")
     else:
         logger.warning("No se extrajeron matrículas")
     
@@ -172,10 +183,27 @@ def run_pipeline(year=None, month=None):
 
     # ==================== CONSOLIDACIÓN Y CARGA DE PAGOS ====================
     logger.info(f"Consolidando pagos (primera cuota + regulares) para {target_date}")
+    
+    # Obtener conjunto de códigos de matrícula válidos para filtrar pagos
+    codigos_matriculas_validas = set()
+    if not df_matriculas_pi_final.empty:
+        codigos_matriculas_validas = set(df_matriculas_pi_final["codigo_matricula"].dropna().astype(str).unique())
+        logger.info(f"Códigos de matrículas válidas para referencia FK: {len(codigos_matriculas_validas)}")
+    
+    # Filtrar pagos regulares para excluir los de matrículas no válidas
+    if not df_regular_pagos_final.empty and codigos_matriculas_validas:
+        total_pagos_regulares_antes = len(df_regular_pagos_final)
+        df_regular_pagos_final = df_regular_pagos_final[
+            df_regular_pagos_final["codigo_matricula"].astype(str).isin(codigos_matriculas_validas)
+        ].reset_index(drop=True)
+        excluidos_regulares = total_pagos_regulares_antes - len(df_regular_pagos_final)
+        if excluidos_regulares > 0:
+            logger.warning(f"Excluidos {excluidos_regulares} pagos regulares sin matrícula válida correspondiente")
+    
     df_final_pagos = pd.concat(
         [df_primera_cuota_pi_final, df_regular_pagos_final], ignore_index=True
     )
-    logger.info(f"Pagos totales consolidados: {len(df_final_pagos)}")
+    logger.info(f"Pagos totales consolidados (después de filtrar por FK): {len(df_final_pagos)}")
     
     # Cargar pagos consolidados
     if not df_final_pagos.empty:
