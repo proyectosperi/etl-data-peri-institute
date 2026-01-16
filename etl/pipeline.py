@@ -80,18 +80,20 @@ def run_pipeline(year=None, month=None):
         None,
     )
     if not df_matriculas_pi_raw.empty:
+        # Filtrar en RAW por Marca temporal antes de transformar
+        if "Marca temporal" in df_matriculas_pi_raw.columns:
+            df_matriculas_pi_raw["Marca temporal"] = pd.to_datetime(df_matriculas_pi_raw["Marca temporal"], dayfirst=True, errors="coerce")
+            total_before = len(df_matriculas_pi_raw)
+            df_matriculas_pi_raw["_fecha_marca"] = df_matriculas_pi_raw["Marca temporal"].dt.strftime("%Y-%m-%d")
+            df_matriculas_pi_raw = df_matriculas_pi_raw.loc[
+                df_matriculas_pi_raw["_fecha_marca"] == target_date
+            ].reset_index(drop=True)
+            logger.info(f"Matrículas RAW filtradas por Marca temporal: {len(df_matriculas_pi_raw)} de {total_before} (fecha={target_date})")
+        else:
+            logger.warning("Columna 'Marca temporal' no encontrada en matrículas, no se aplicó filtro de fecha")
+        
         df_matriculas_pi_final = transform_matriculas(df_matriculas_pi_raw)
         df_primera_cuota_pi_final = transform_pagos_primera_cuota(df_matriculas_pi_raw)
-        
-        # Filtrar solo matrículas del día anterior
-        if "fecha_matricula" in df_matriculas_pi_final.columns:
-            total_before = len(df_matriculas_pi_final)
-            df_matriculas_pi_final = df_matriculas_pi_final.loc[
-                df_matriculas_pi_final["fecha_matricula"] == target_date
-            ].reset_index(drop=True)
-            logger.info(f"Matrículas filtradas: {len(df_matriculas_pi_final)} de {total_before} (fecha={target_date})")
-        else:
-            logger.warning("Columna 'fecha_matricula' no encontrada, no se aplicó filtro de fecha")
     else:
         logger.warning("No se extrajeron matrículas")
     
@@ -116,17 +118,19 @@ def run_pipeline(year=None, month=None):
         None,
     )
     if not df_regular_pagos_raw.empty:
-        df_regular_pagos_final = transform_regular_pagos(df_regular_pagos_raw)
-        
-        # Filtrar solo pagos del día anterior
-        if "fecha_pago" in df_regular_pagos_final.columns:
-            total_before = len(df_regular_pagos_final)
-            df_regular_pagos_final = df_regular_pagos_final.loc[
-                df_regular_pagos_final["fecha_pago"] == target_date
+        # Filtrar en RAW por Marca temporal antes de transformar
+        if "Marca temporal" in df_regular_pagos_raw.columns:
+            df_regular_pagos_raw["Marca temporal"] = pd.to_datetime(df_regular_pagos_raw["Marca temporal"], dayfirst=True, errors="coerce")
+            total_before = len(df_regular_pagos_raw)
+            df_regular_pagos_raw["_fecha_marca"] = df_regular_pagos_raw["Marca temporal"].dt.strftime("%Y-%m-%d")
+            df_regular_pagos_raw = df_regular_pagos_raw.loc[
+                df_regular_pagos_raw["_fecha_marca"] == target_date
             ].reset_index(drop=True)
-            logger.info(f"Pagos regulares filtrados: {len(df_regular_pagos_final)} de {total_before} (fecha={target_date})")
+            logger.info(f"Pagos regulares RAW filtrados por Marca temporal: {len(df_regular_pagos_raw)} de {total_before} (fecha={target_date})")
         else:
-            logger.warning("Columna 'fecha_pago' no encontrada en pagos regulares, no se aplicó filtro de fecha")
+            logger.warning("Columna 'Marca temporal' no encontrada en pagos regulares, no se aplicó filtro de fecha")
+        
+        df_regular_pagos_final = transform_regular_pagos(df_regular_pagos_raw)
     else:
         logger.warning("No se extrajeron pagos regulares")
 
@@ -161,16 +165,7 @@ def run_pipeline(year=None, month=None):
     df_final_pagos = pd.concat(
         [df_primera_cuota_pi_final, df_regular_pagos_final], ignore_index=True
     )
-    
-    # Filtrar pagos consolidados por fecha
-    if "fecha_pago" in df_final_pagos.columns and not df_final_pagos.empty:
-        total_before = len(df_final_pagos)
-        df_final_pagos = df_final_pagos.loc[
-            df_final_pagos["fecha_pago"] == target_date
-        ].reset_index(drop=True)
-        logger.info(f"Pagos consolidados filtrados: {len(df_final_pagos)} de {total_before} (fecha={target_date})")
-    else:
-        logger.info(f"Pagos totales consolidados: {len(df_final_pagos)}")
+    logger.info(f"Pagos totales consolidados: {len(df_final_pagos)}")
     
     # Cargar pagos consolidados
     if not df_final_pagos.empty:
