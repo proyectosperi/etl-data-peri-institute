@@ -1,0 +1,55 @@
+name: Daily ETL Pipeline
+
+on:
+  schedule:
+    # Ejecutar diariamente a las 06:00 UTC (1:00 AM hora peruana UTC-5)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Permite ejecución manual
+
+jobs:
+  run-etl:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run ETL Pipeline
+        env:
+          # Google Sheets credentials
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          
+          # Spreadsheet IDs and worksheets
+          Matricula_PI_ID: ${{ secrets.MATRICULA_PI_ID }}
+          WORKSHEET_CURSOS: ${{ secrets.WORKSHEET_CURSOS }}
+          WORKSHEET_MATRICULAS: ${{ secrets.WORKSHEET_MATRICULAS }}
+          WORKSHEET_PAGOS: ${{ secrets.WORKSHEET_PAGOS }}
+          WORKSHEET_ESTUDIANTES: ${{ secrets.WORKSHEET_ESTUDIANTES }}
+          
+          # Supabase credentials
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          cd etl
+          python pipeline.py
+
+      - name: Upload output artifacts (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: etl-output-${{ github.run_number }}
+          path: etl/output/
+          retention-days: 7
+          if-no-files-found: ignore
