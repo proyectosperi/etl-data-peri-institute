@@ -45,6 +45,11 @@ def run_pipeline(year=None, month=None):
     df_regular_pagos_final = pd.DataFrame()
     df_es_final = pd.DataFrame()
 
+    # ==================== PASO 1: UPSERTS DE DATOS MAESTROS ====================
+    logger.info("="*60)
+    logger.info("PASO 1: PROCESANDO DATOS MAESTROS (UPSERT)")
+    logger.info("="*60)
+    
     # ==================== CURSOS (UPSERT) ====================
     logger.info("Procesando hoja Cursos (datos maestros - UPSERT)")
     df_cursos_pi_raw = extract_sheet_pi_1(
@@ -71,6 +76,37 @@ def run_pipeline(year=None, month=None):
     else:
         logger.info("No hay cursos para cargar")
 
+    # ==================== ESTUDIANTES (UPSERT) ====================
+    logger.info("Procesando hoja Estudiantes (datos maestros - UPSERT)")
+    df_alumnos_pi_raw = extract_sheet_pi_1(
+        os.getenv("Matricula_PI_ID"),
+        os.getenv("WORKSHEET_ESTUDIANTES"),
+        None,
+        None,
+    )
+    if not df_alumnos_pi_raw.empty:
+        df_es_final = transform_estudiantes(df_alumnos_pi_raw)
+        logger.info(f"Estudiantes extraídos y transformados: {len(df_es_final)}")
+    else:
+        logger.warning("No se extrajeron estudiantes")
+    
+    # Cargar estudiantes con upsert
+    if not df_es_final.empty:
+        logger.info(f"Cargando {len(df_es_final)} estudiantes con UPSERT...")
+        try:
+            load("estudiantes", df_es_final, upsert=True, pk_column="codigo_estudiante")
+            logger.info(f"✓ Estudiantes cargados exitosamente: {len(df_es_final)} registros")
+        except Exception as e:
+            logger.error(f"✗ Error al cargar estudiantes: {e}")
+            raise
+    else:
+        logger.info("No hay estudiantes para cargar")
+
+    # ==================== PASO 2: INSERTS DE DATOS TRANSACCIONALES ====================
+    logger.info("="*60)
+    logger.info(f"PASO 2: PROCESANDO DATOS TRANSACCIONALES - Fecha: {target_date}")
+    logger.info("="*60)
+    
     # ==================== MATRICULAS (FILTRADAS POR FECHA) ====================
     logger.info(f"Procesando hoja Matriculas (filtro: {target_date})")
     df_matriculas_pi_raw = extract_sheet_pi_2(
@@ -133,32 +169,6 @@ def run_pipeline(year=None, month=None):
         df_regular_pagos_final = transform_regular_pagos(df_regular_pagos_raw)
     else:
         logger.warning("No se extrajeron pagos regulares")
-
-    # ==================== ESTUDIANTES (UPSERT) ====================
-    logger.info("Procesando hoja Estudiantes (datos maestros - UPSERT)")
-    df_alumnos_pi_raw = extract_sheet_pi_1(
-        os.getenv("Matricula_PI_ID"),
-        os.getenv("WORKSHEET_ESTUDIANTES"),
-        None,
-        None,
-    )
-    if not df_alumnos_pi_raw.empty:
-        df_es_final = transform_estudiantes(df_alumnos_pi_raw)
-        logger.info(f"Estudiantes extraídos y transformados: {len(df_es_final)}")
-    else:
-        logger.warning("No se extrajeron estudiantes")
-    
-    # Cargar estudiantes con upsert
-    if not df_es_final.empty:
-        logger.info(f"Cargando {len(df_es_final)} estudiantes con UPSERT...")
-        try:
-            load("estudiantes", df_es_final, upsert=True, pk_column="codigo_estudiante")
-            logger.info(f"✓ Estudiantes cargados exitosamente: {len(df_es_final)} registros")
-        except Exception as e:
-            logger.error(f"✗ Error al cargar estudiantes: {e}")
-            raise
-    else:
-        logger.info("No hay estudiantes para cargar")
 
     # ==================== CONSOLIDACIÓN Y CARGA DE PAGOS ====================
     logger.info(f"Consolidando pagos (primera cuota + regulares) para {target_date}")
