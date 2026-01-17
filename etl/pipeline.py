@@ -200,6 +200,10 @@ def run_pipeline(year=None, month=None):
         if excluidos_regulares > 0:
             logger.warning(f"Excluidos {excluidos_regulares} pagos regulares sin matrícula válida correspondiente")
     
+    # Asegurar índices únicos antes de concatenar
+    df_primera_cuota_pi_final = df_primera_cuota_pi_final.reset_index(drop=True)
+    df_regular_pagos_final = df_regular_pagos_final.reset_index(drop=True)
+    
     df_final_pagos = pd.concat(
         [df_primera_cuota_pi_final, df_regular_pagos_final], ignore_index=True
     )
