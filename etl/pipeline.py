@@ -200,13 +200,30 @@ def run_pipeline(year=None, month=None):
         if excluidos_regulares > 0:
             logger.warning(f"Excluidos {excluidos_regulares} pagos regulares sin matrícula válida correspondiente")
     
-    # Asegurar índices únicos antes de concatenar
+    # Asegurar índices y columnas únicos antes de concatenar
     df_primera_cuota_pi_final = df_primera_cuota_pi_final.reset_index(drop=True)
     df_regular_pagos_final = df_regular_pagos_final.reset_index(drop=True)
     
-    df_final_pagos = pd.concat(
-        [df_primera_cuota_pi_final, df_regular_pagos_final], ignore_index=True
-    )
+    # Eliminar columnas duplicadas si existen
+    if df_primera_cuota_pi_final.columns.duplicated().any():
+        logger.warning("Columnas duplicadas detectadas en df_primera_cuota_pi_final, eliminando...")
+        df_primera_cuota_pi_final = df_primera_cuota_pi_final.loc[:, ~df_primera_cuota_pi_final.columns.duplicated()]
+    if df_regular_pagos_final.columns.duplicated().any():
+        logger.warning("Columnas duplicadas detectadas en df_regular_pagos_final, eliminando...")
+        df_regular_pagos_final = df_regular_pagos_final.loc[:, ~df_regular_pagos_final.columns.duplicated()]
+    
+    # Concatenar solo los DataFrames no vacíos
+    dataframes_to_concat = []
+    if not df_primera_cuota_pi_final.empty:
+        dataframes_to_concat.append(df_primera_cuota_pi_final)
+    if not df_regular_pagos_final.empty:
+        dataframes_to_concat.append(df_regular_pagos_final)
+    
+    if dataframes_to_concat:
+        df_final_pagos = pd.concat(dataframes_to_concat, ignore_index=True)
+    else:
+        # Si ambos están vacíos, crear un DataFrame vacío con las columnas esperadas
+        df_final_pagos = pd.DataFrame(columns=["codigo_matricula", "monto_pago", "metodo_pago", "moneda", "encargado", "fecha_pago"])
     logger.info(f"Pagos totales consolidados (después de filtrar por FK): {len(df_final_pagos)}")
     
     # Cargar pagos consolidados
