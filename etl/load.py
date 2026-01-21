@@ -8,6 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from logger import get_logger
 from postgrest.exceptions import APIError
+import time
 
 logger = get_logger("LOAD")
 
@@ -75,8 +76,11 @@ def load(table_name: str, df: pd.DataFrame, abort_on_error: bool = True, pk_colu
                             existing_vals.extend([r.get(pk_column) if isinstance(r, dict) else r[pk_column] for r in part])
 
                     if existing_vals:
-                        logger.error(f"Claves ya existentes en la tabla '{table_name}' para columna '{pk_column}': {existing_vals}")
-                        raise ValueError(f"Claves ya existentes en la tabla '{table_name}': {existing_vals}")
+                        # Logging optimizado: mostrar solo cantidad + ejemplos
+                        total_dups = len(existing_vals)
+                        ejemplos = existing_vals[:5] if len(existing_vals) > 5 else existing_vals
+                        logger.error(f"Claves ya existentes en tabla '{table_name}' para '{pk_column}': {total_dups} duplicados. Ejemplos: {ejemplos}")
+                        raise ValueError(f"Claves ya existentes en la tabla '{table_name}': {total_dups} duplicados")
             except Exception as e:
                 logger.warning(f"No se pudo verificar claves existentes en DB (continuando): {e}")
 
@@ -102,7 +106,9 @@ def load(table_name: str, df: pd.DataFrame, abort_on_error: bool = True, pk_colu
                         missing_students = list(set(student_keys) - set(existing_students))
 
                     if missing_students:
-                        logger.error(f"Faltan estudiantes referenciados en 'matriculas' no presentes en 'estudiantes': {missing_students}")
+                        total_missing = len(missing_students)
+                        ejemplos = missing_students[:5] if len(missing_students) > 5 else missing_students
+                        logger.error(f"Faltan estudiantes en 'matriculas': {total_missing} faltantes. Ejemplos: {ejemplos}")
                         if drop_missing_students:
                             try:
                                 # Guardar los registros que serán eliminados en un CSV para auditoría
@@ -247,25 +253,85 @@ def load(table_name: str, df: pd.DataFrame, abort_on_error: bool = True, pk_colu
         return v
 
 
-    # Sanear datos antes de la inserción masiva
+    # Sanear datos antes de la inserción
     cleaned_data = [{k: _sanitize_value(v) for k, v in rec.items()} for rec in data]
 
+    # Constantes para batching y reintentos
+    BATCH_SIZE = 100  # Reducido de 3512 a 100 para evitar timeouts
+    MAX_RETRIES = 3
+    RETRY_DELAY_BASE = 2  # segundos
+
+    def _is_transient_error(error):
+        """Determina si el error es transitorio (red) o permanente (validación)"""
+        error_str = str(error).lower()
+        # Errores de red/gateway que pueden recuperarse con reintentos
+        transient_patterns = [
+            'network connection lost',
+            'gateway error',
+            'timeout',
+            '502', '503', '504',
+            'connection reset',
+            'temporarily unavailable'
+        ]
+        return any(pattern in error_str for pattern in transient_patterns)
+
+    def _execute_with_retry(operation, batch_data, batch_num, total_batches):
+        """Ejecuta operación con reintentos exponenciales para errores transitorios"""
+        for attempt in range(MAX_RETRIES):
+            try:
+                if operation == 'upsert':
+                    supabase.table(table_name).upsert(batch_data).execute()
+                else:
+                    supabase.table(table_name).insert(batch_data).execute()
+                return True
+            except Exception as e:
+                is_last_attempt = (attempt == MAX_RETRIES - 1)
+                
+                if _is_transient_error(e):
+                    if is_last_attempt:
+                        logger.error(f"Batch {batch_num}/{total_batches}: Error transitorio persistente tras {MAX_RETRIES} intentos: {e}")
+                        raise
+                    else:
+                        delay = RETRY_DELAY_BASE ** (attempt + 1)
+                        logger.warning(f"Batch {batch_num}/{total_batches}: Error transitorio (intento {attempt+1}/{MAX_RETRIES}). Reintentando en {delay}s: {e}")
+                        time.sleep(delay)
+                else:
+                    # Error permanente (validación, permisos, etc)
+                    logger.error(f"Batch {batch_num}/{total_batches}: Error permanente: {e}")
+                    raise
+        return False
+
+    # Procesar en lotes (batching)
+    total_records = len(cleaned_data)
+    total_batches = math.ceil(total_records / BATCH_SIZE)
+    
+    logger.info(f"Procesando {total_records} registros en {total_batches} lotes de {BATCH_SIZE}")
+    
     try:
-        if upsert:
-            logger.info(f"Ejecutando upsert en tabla '{table_name}' (upsert=True).")
-            supabase.table(table_name).upsert(cleaned_data).execute()
-        else:
-            supabase.table(table_name).insert(cleaned_data).execute()
-        logger.info("Carga masiva completada.")
+        for i in range(0, total_records, BATCH_SIZE):
+            batch = cleaned_data[i:i + BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            
+            logger.info(f"Procesando lote {batch_num}/{total_batches} ({len(batch)} registros)")
+            
+            operation = 'upsert' if upsert else 'insert'
+            _execute_with_retry(operation, batch, batch_num, total_batches)
+            
+            # Pequeña pausa entre lotes para no sobrecargar el servidor
+            if batch_num < total_batches:
+                time.sleep(0.5)
+        
+        logger.info(f"Carga completada: {total_records} registros en {total_batches} lotes")
         return
+        
     except Exception:
-        logger.exception("Error en carga masiva a Supabase.")
+        logger.exception("Error en carga por lotes a Supabase.")
 
         if abort_on_error:
-            logger.error("Abortando carga completa por fallo en inserción masiva (abort_on_error=True). No se realizarán inserciones parciales.")
+            logger.error("Abortando carga completa por fallo en inserción (abort_on_error=True).")
             raise
 
-        logger.warning("Inserción masiva falló; intentando inserción registro a registro para aislar el conflicto (abort_on_error=False).")
+        logger.warning("Inserción por lotes falló; intentando inserción registro a registro para aislar el conflicto (abort_on_error=False).")
 
     # Si llegamos acá, se solicitó intentar por registro (modo debug).
     for idx, rec in enumerate(data):
